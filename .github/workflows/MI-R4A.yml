@@ -1,11 +1,10 @@
-name: 小米R4A定制固件编译
+name: 小米R4A固件编译
 
 on: 
   workflow_dispatch:
 
 permissions:
   contents: write
-  actions: write
 
 env:
   TZ: Asia/Shanghai
@@ -16,15 +15,15 @@ jobs:
     timeout-minutes: 90
 
     steps:
-    # ----------------------------------
-    # 步骤1：检出代码（无需sudo）
-    # ----------------------------------
+    # ======================
+    # 1. 检出仓库
+    # ======================
     - name: Checkout
       uses: actions/checkout@v4
 
-    # ----------------------------------
-    # 步骤2：初始化环境（修复权限问题）
-    # ----------------------------------
+    # ======================
+    # 2. 初始化环境（无sudo）
+    # ======================
     - name: 初始化环境
       env:
         DEBIAN_FRONTEND: noninteractive
@@ -33,28 +32,26 @@ jobs:
         apt-get -y install \
           unzip libtool-bin curl cmake gperf gawk flex bison nano xxd fakeroot \
           cpio git python-docutils gettext automake autopoint texinfo build-essential \
-          help2man pkg-config zlib1g-dev libgmp3-dev libmpc-dev libmpfr-dev libncurses5-dev \
-          libltdl-dev wget
-        timedatectl set-timezone Asia/Shanghai
+          help2man pkg-config zlib1g-dev libgmp3-dev libmpc-dev libmpfr-dev \
+          libncurses5-dev libltdl-dev wget
 
-    # ----------------------------------
-    # 步骤3：克隆源码（路径优化）
-    # ----------------------------------
+    # ======================
+    # 3. 克隆源码与配置修正
+    # ======================
     - name: 克隆源码
       run: |
         git clone --depth=1 https://github.com/uwjtg/padavan-KVR-8267
         cd padavan-KVR-8267/toolchain-mipsel
         ./dl_toolchain.sh
-        mkdir -p ../images
 
-        # R4A存储配置修正
+        # R4A存储配置修正（关键修复）
         sed -i 's/CONFIG_MTD_STORE_PART_SIZ=0x200000/CONFIG_MTD_STORE_PART_SIZ=0x400000/g' ../trunk/configs/boards/MI-R4A/kernel-3.4.x.config
         sed -i 's/size_etc="6M"/size_etc="4M"/g' ../trunk/user/scripts/dev_init.sh
         sed -i 's/mtd_part_size=65536/mtd_part_size=4194304/g' ../trunk/user/scripts/mtd_storage.sh
 
-    # ----------------------------------
-    # 步骤4：编译固件（安全配置）
-    # ----------------------------------
+    # ======================
+    # 4. 编译固件（安全配置）
+    # ======================
     - name: 编译固件
       env:
         TNAME: MI-R4A
@@ -62,33 +59,33 @@ jobs:
         cd padavan-KVR-8267/trunk
         cp configs/templates/$TNAME.config .config
 
-        # 核心配置替换（避免sed错误）
+        # 安全替换配置（无反向引用错误）
         sed -i 's/^CONFIG_FIRMWARE_INCLUDE_VNTCLI=.*/CONFIG_FIRMWARE_INCLUDE_VNTCLI=y/' .config
         sed -i 's/^CONFIG_FIRMWARE_INCLUDE_VNTS=.*/CONFIG_FIRMWARE_INCLUDE_VNTS=y/' .config
         sed -i 's/^CONFIG_FIRMWARE_WIFI2_DRIVER=.*/CONFIG_FIRMWARE_WIFI2_DRIVER=3.0/' .config
 
-        # 必须功能启用
+        # 核心功能启用
         echo "CONFIG_FIRMWARE_ENABLE_IPV6=y" >> .config
         echo "CONFIG_FIRMWARE_INCLUDE_OPENSSH=y" >> .config
 
-        # 启动编译流程
+        # 编译流程
         ./clear_tree
         ./build_firmware_modify $TNAME 0
 
-        # 体积检查（16MB闪存限制）
+        # 体积检查（必须小于16MB）
         FIRMWARE_SIZE=$(du -b images/*.trx | cut -f1)
         if [ $FIRMWARE_SIZE -gt 16252928 ]; then
           echo "::error::固件体积超标：当前 $(($FIRMWARE_SIZE/1024/1024))MB"
           exit 1
         fi
 
-        mv images/*.trx ../images/
-
-    # ----------------------------------
-    # 步骤5：发布固件
-    # ----------------------------------
+    # ======================
+    # 5. 上传固件（自动打包）
+    # ======================
     - name: 上传固件
       uses: actions/upload-artifact@v4
       with:
         name: MI-R4A_固件
-        path: padavan-KVR-8267/images/*.trx
+        path: |
+          padavan-KVR-8267/trunk/images/*.trx
+          padavan-KVR-8267/trunk/.config
