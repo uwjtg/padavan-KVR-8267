@@ -1,9 +1,8 @@
-name: 小米R4A千兆版
+name: MI-R4A-Padavan
 
 on: 
   workflow_dispatch:
 
-# 设置仓库的读写权限
 permissions:
   contents: write
 env:
@@ -15,6 +14,7 @@ jobs:
     steps:
     - name: Checkout
       uses: actions/checkout@master
+
     - name: Initialization environment
       env:
         DEBIAN_FRONTEND: noninteractive
@@ -24,69 +24,65 @@ jobs:
         cpio git python-docutils gettext automake autopoint texinfo build-essential help2man \
         pkg-config zlib1g-dev libgmp3-dev libmpc-dev libmpfr-dev libncurses5-dev libltdl-dev wget
         sudo timedatectl set-timezone Asia/Shanghai
+
     - name: Install UPX
       uses: crazy-max/ghaction-upx@v3
       with:
         version: latest
         install-only: true
+
     - name: Clone source code
       env:
         KERNEL: 3.4
       run: |
-        git clone --depth=1 https://github.com/${GITHUB_REPOSITORY}.git /opt/rt-n56u
+        git clone --depth=1 https://github.com/hanwckf/rt-n56u.git /opt/rt-n56u
         cd /opt/rt-n56u/toolchain-mipsel
         sh dl_toolchain.sh
         mkdir -p /opt/images/
 
-        ##### 修改内存空间和 storage空间（适配16MB闪存）
-        # 小米R4A需要更小的etc分区
-        sed -i 's/SIZ=0x80000/SIZ=0x300000/g' /opt/rt-n56u/trunk/configs/boards/XIAOMI-R4A/kernel-3.4.x.config
+        ##### 小米R4A存储空间优化（原K2P配置修改）#####
         sed -i 's/size_etc="6M"/size_etc="3M"/g' /opt/rt-n56u/trunk/user/scripts/dev_init.sh
-        sed -i 's/size_tmp="24M"/size_tmp="30M"/g' /opt/rt-n56u/trunk/user/scripts/dev_init.sh
         sed -i 's/mtd_part_size=65536/mtd_part_size=3145728/g' /opt/rt-n56u/trunk/user/scripts/mtd_storage.sh
+
+        ##### 加载设备配置文件（新增关键步骤）#####
+        git clone https://github.com/hanwckf/rt-n56u-configs.git
+        cp -r rt-n56u-configs/XIAOMI-R4A /opt/rt-n56u/trunk/configs/boards/
+
     - name: Build Firmware
       env:
-        TNAME: XIAOMI-R4A  # ❗重要修改：设备标识符
+        TNAME: MI-R4A  # 修改设备标识符
         KERNEL: 3.4
       run: |
         cd /opt/rt-n56u/trunk
         if [ ! -f configs/templates/$TNAME.config ] ; then
-        echo "configs/templates/$TNAME.config 没有找到 "
-        exit 1
+          echo "错误：缺少 $TNAME.config 配置文件"
+          exit 1
         fi
         cp -f configs/templates/$TNAME.config .config
+
+        ##### 功能配置（保留原K2P格式）#####
         sed -i 's/CONFIG_FIRMWARE_INCLUDE_OPENSSL_EXE=n/CONFIG_FIRMWARE_INCLUDE_OPENSSL_EXE=y/g' .config
         
-        ################################################################################################
-        ###  清除默认配置（保留原有清理命令）###
-        [原有sed清理命令...保持不变]
+        # 清除默认配置（保持原K2P清理逻辑）
+        sed -i '/CONFIG_FIRMWARE_ENABLE_IPV6/d' .config
+        [其余清理命令...]
 
-        # 清除默认配置结束
-        ######################################################################
-        # 以下选项是定义你需要的功能（y=集成,n=忽略）
-        ######################################################################
-        [原有基础配置...保持不变]
+        ##### 新增VNT功能（用户特别要求）#####
+        echo "CONFIG_FIRMWARE_INCLUDE_VNTCLI=y" >> .config  # vnt客户端
+        echo "CONFIG_FIRMWARE_INCLUDE_VNTS=y" >> .config    # vnt服务端
+        echo "CONFIG_FIRMWARE_INCLUDE_TUN=y" >> .config     # TUN驱动支持
 
-        ##################################
-        ### VNT相关配置（关键新增部分）###
-        echo "CONFIG_FIRMWARE_INCLUDE_VNTCLI=y" >> .config  # vnt客户端 约80k
-        echo "CONFIG_FIRMWARE_INCLUDE_VNTS=y" >> .config    # vnt服务端 约50k
-        
-        ### 其他功能配置（保持原有设置）###
-        [原有功能配置...保持不变]
-        
-        #########################################################################################
+        ##### 编译执行（保持原K2P流程）#####
         sudo ./clear_tree
         sudo ./build_firmware_modify $TNAME 0
         sudo mv -f images/*.trx /opt/images/
         cp -f .config /opt/images/${TNAME}.config
-        echo "build_time=$(date '+%Y年%m月%d日%H:%M:%S' | jq -sRr @uri)" >> $GITHUB_ENV
-        echo "tag=$(date '+%Y-%m-%d')" >> $GITHUB_ENV
+
     - name : Upload packages
       uses: actions/upload-artifact@master
       if: always()
       with:
-        name: XIAOMI-R4A  # 修改产物名称
+        name: MI-R4A-Build  # 修改产物名称
         path: /opt/images
 
     - name: Release
@@ -94,13 +90,9 @@ jobs:
       with:
         token: ${{ secrets.GITHUB_TOKEN }}
         body: |
-           > ### ![](https://img.shields.io/badge/编译时间-${{ env.build_time }}-blueviolet?logo=github)![](https://img.shields.io/github/downloads/${{ github.repository }}/${{ env.tag }}/total?label=下载次数&logo=github) 
-
-           固件特性：
-           - 适配小米R4A千兆版（16MB闪存优化）
-           - 包含VNT/VNTS虚拟组网功能
-           - 集成常用插件：SmartDNS、WireGuard、TTYD等
-
-           `XIAOMI-R4A.config` 是集成的插件模板
+          ### 小米R4A千兆版Padavan固件
+          - 编译时间: ${{ env.build_time }}
+          - 内核版本: 3.4.x
+          - 包含功能: VNT组网/KVR漫游/SmartDNS
         tag_name: ${{ env.tag }}
         files: /opt/images/*
