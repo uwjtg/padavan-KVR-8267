@@ -1,0 +1,84 @@
+name: 小米R4A
+
+on: 
+  workflow_dispatch:
+
+#设置仓库的读写权限
+permissions:
+  contents: write
+env:
+  TZ: Asia/Shanghai
+jobs:
+  build:
+    runs-on: ubuntu-20.04
+
+    steps:
+    - name: Checkout
+      uses: actions/checkout@v4
+
+    - name: 初始化环境
+      env:
+        DEBIAN_FRONTEND: noninteractive
+      run: |
+        apt-get update
+        apt-get -y install unzip libtool-bin curl cmake gperf gawk flex bison nano xxd fakeroot \
+        cpio git python-docutils gettext automake autopoint texinfo build-essential help2man \
+        pkg-config zlib1g-dev libgmp3-dev libmpc-dev libmpfr-dev libncurses5-dev libltdl-dev wget
+        timedatectl set-timezone Asia/Shanghai
+
+    - name: 克隆源码
+      run: |
+        git clone --depth=1 https://github.com/uwjtg/padavan-KVR-8267 /opt/rt-n56u
+        cd /opt/rt-n56u/toolchain-mipsel
+        sh dl_toolchain.sh
+        mkdir -p /opt/images/
+
+        ##### 关键修复：修正R4A存储配置路径
+        sed -i 's/CONFIG_MTD_STORE_PART_SIZ=0x200000/CONFIG_MTD_STORE_PART_SIZ=0x400000/g' /opt/rt-n56u/trunk/configs/boards/MI-R4A/kernel-3.4.x.config
+        sed -i 's/size_etc="6M"/size_etc="4M"/g' /opt/rt-n56u/trunk/user/scripts/dev_init.sh
+        sed -i 's/mtd_part_size=65536/mtd_part_size=4194304/g' /opt/rt-n56u/trunk/user/scripts/mtd_storage.sh
+
+    - name: 编译固件
+      env:
+        TNAME: MI-R4A
+      run: |
+        cd /opt/rt-n56u/trunk
+        cp configs/templates/$TNAME.config .config
+
+        ############################################################
+        ### 安全替换配置（避免sed错误）
+        ############################################################
+        # 启用VNT插件
+        sed -i 's/^CONFIG_FIRMWARE_INCLUDE_VNTCLI=.*/CONFIG_FIRMWARE_INCLUDE_VNTCLI=y/' .config
+        sed -i 's/^CONFIG_FIRMWARE_INCLUDE_VNTS=.*/CONFIG_FIRMWARE_INCLUDE_VNTS=y/' .config
+
+        # 无线驱动配置
+        sed -i 's/^CONFIG_FIRMWARE_WIFI2_DRIVER=.*/CONFIG_FIRMWARE_WIFI2_DRIVER=3.0/' .config
+
+        ############################################################
+        # 核心功能配置（优化版）
+        ############################################################
+        echo "CONFIG_FIRMWARE_ENABLE_IPV6=y" >> .config
+        echo "CONFIG_FIRMWARE_INCLUDE_OPENSSH=y" >> .config
+        echo "CONFIG_FIRMWARE_INCLUDE_TTYD=y" >> .config
+
+        ############################################################
+        # 编译与验证
+        ############################################################
+        ./clear_tree
+        ./build_firmware_modify $TNAME 0
+
+        # 体积检查（16MB闪存需<15.5MB）
+        FIRMWARE_SIZE=$(du -b images/*.trx | cut -f1)
+        if [ $FIRMWARE_SIZE -gt 16252928 ]; then
+          echo "::error::固件体积过大！当前: $(($FIRMWARE_SIZE/1024/1024))MB"
+          exit 1
+        fi
+
+        mv -f images/*.trx /opt/images/
+
+    - name: 上传固件
+      uses: actions/upload-artifact@v4
+      with:
+        name: MI-R4A-VNT
+        path: /opt/images/*.trx
